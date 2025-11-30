@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Pixel Maze Runner — Happy Ball</title>
+<style>
+body {margin:0; background:#07162b; font-family:Arial,sans-serif; user-select:none; color:white;}
+#startScreen,#lessonScreen,#quoteScreen {position:fixed; inset:0; display:flex; justify-content:center; align-items:center; background:rgba(0,0,0,0.7); backdrop-filter:blur(4px); z-index:5;}
+.card {background:#0d1b2e; padding:30px 50px; border-radius:12px; text-align:center; width:600px; box-shadow:0 0 20px rgba(0,0,0,0.5); transition: box-shadow 0.3s, border 0.3s;}
+button {background:#22c55e; border:none; padding:12px 25px; color:black; font-weight:bold; border-radius:6px; cursor:pointer; font-size:15px; margin:10px;}
+button:hover { background:#16a34a; }
+#mazeCanvas {background:#0a1a2b; border:8px solid #123456; border-radius:8px; image-rendering:pixelated;}
+#hud {text-align:center;margin-top:10px;font-size:14px;display:flex;justify-content:center;gap:30px;}
+.hudBox {background:#0d1b2e;padding:6px 12px;border-radius:6px;opacity:0.85;}
+
+/* DEATH QUOTE */
+.death-quote-style { background:#800000 !important; border:3px solid #ff4d4d; box-shadow:0 0 25px #ff0000; }
+@keyframes deathShake { 0% {transform:translate(0,0);} 25% {transform:translate(-5px,3px);} 50% {transform:translate(4px,-4px);} 75% {transform:translate(-3px,3px);} 100% {transform:translate(0,0);} }
+.shake { animation:deathShake 0.35s; }
+
+/* DEATH FLASH & RESPAWN */
+#deathFlash {position:fixed; inset:0; background:red; opacity:0; pointer-events:none; transition:opacity .35s; z-index:20;}
+#respawnText {position:fixed; inset:0; display:flex; justify-content:center; align-items:center; font-size:48px; font-weight:bold; opacity:0; transition:.35s; pointer-events:none; z-index:21;}
+
+/* WIN GLOW */
+.win-glow { box-shadow:0 0 35px #00ff88,0 0 70px #00ff88; border:3px solid #00ff88 !important; }
+
+/* MOBILE BUTTONS */
+#mobileControls {text-align:center;margin-top:15px;}
+.arrowBtn {width:70px; height:70px; font-size:32px; border-radius:10px; background:#0d1b2e; border:3px solid #1f3e5a; display:inline-flex; justify-content:center; align-items:center; cursor:pointer; color:white; user-select:none; margin:5px; transition: background 0.2s;}
+.arrowBtn:active { background:#123456; }
+</style>
+</head>
+<body>
+
+<div id="startScreen">
+<div class="card">
+<h1>PIXEL MAZE RUNNER</h1>
+<p>Demon spawns 5 seconds after your first move.</p>
+<button onclick="startGame()">Start Game</button>
+</div>
+</div>
+
+<div style="width:85%;margin:auto;margin-top:30px;display:flex;justify-content:center;">
+<canvas id="mazeCanvas" width="820" height="820"></canvas>
+</div>
+
+<div id="hud">
+<div class="hudBox">Level: <span id="levelTxt">1</span>/5</div>
+<div class="hudBox">Status: <span id="statusTxt">Running</span></div>
+<div class="hudBox">Lives: <span id="livesTxt">3</span></div>
+</div>
+
+<!-- MOBILE CONTROLS -->
+<div id="mobileControls">
+    <div><div class="arrowBtn" onclick="move('up')">▲</div></div>
+    <div>
+        <div class="arrowBtn" onclick="move('left')">◀</div>
+        <div class="arrowBtn" onclick="move('down')">▼</div>
+        <div class="arrowBtn" onclick="move('right')">▶</div>
+    </div>
+</div>
+
+<!-- LESSON -->
+<div id="lessonScreen" style="display:none;">
+<div class="card">
+<h2 id="lessonTitle"></h2>
+<p id="lessonText"></p>
+<button onclick="nextLevel()">Next Level</button>
+<button onclick="restartGame()">Restart Game</button>
+</div>
+</div>
+
+<!-- QUOTE -->
+<div id="quoteScreen" style="display:none;">
+<div class="card">
+<h2>Sleep Advice</h2>
+<p id="quoteText"></p>
+<button onclick="closeQuote()">Continue</button>
+</div>
+</div>
+
+<!-- DEATH FLASH & RESPAWN -->
+<div id="deathFlash"></div>
+<div id="respawnText">Respawning…</div>
+
+<!-- FIREWORKS -->
+<canvas id="fireworksCanvas" width="820" height="820"
+ style="position:fixed;inset:0;margin:auto;pointer-events:none;display:none;z-index:15;"></canvas>
+
+<script>
+// ---------- GAME VARIABLES ----------
+const SIZE=41,CELL=20;
+let level=1,lives=3;
+let player={x:1,y:1,bounce:0},px=20,py=20,targetX=1,targetY=1;
+let enemy=null,chasing=false,firstMove=false,enemySpeedCounter=0;
+let maze=[];
+const canvas=document.getElementById("mazeCanvas");
+const ctx=canvas.getContext("2d");
+
+// Lessons & Quotes
+const lessons=[{title:"Lesson — Nod",text:"Short-term sleep loss slows reaction time."},{title:"Lesson — Drift",text:"Memory weakens without sleep."},{title:"Lesson — Yawn",text:"Lack of sleep disrupts mood."},{title:"Lesson — Doze",text:"Your body repairs during sleep."},{title:"Lesson — REM",text:"Dreaming processes emotions."}];
+const quotes=["Consistent sleep improves memory.","Avoid caffeine late in the day.","Rest boosts alertness.","Sleep helps control emotions.","20 minutes of rest helps your brain."];
+
+// ---------- MAZE ----------
+const wallThemes=["#654321","#3b2f5a","#1f3e5a","#5a2b2b","#2b5a3b"];
+function shuffle(a){for(let i=a.length-1;i>0;i--){let j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}}
+function generateMaze(){
+    maze=Array.from({length:SIZE},()=>Array(SIZE).fill(1));
+    function carve(x,y){
+        const dirs=[[0,-2],[0,2],[-2,0],[2,0]]; shuffle(dirs);
+        for(const [dx,dy] of dirs){
+            let nx=x+dx,ny=y+dy;
+            if(nx>0&&nx<SIZE-1&&ny>0&&ny<SIZE-1&&maze[ny][nx]==1){
+                maze[y+dy/2][x+dx/2]=0;
+                maze[ny][nx]=0;
+                carve(nx,ny);
+            }
+        }
+    }
+    maze[1][1]=0; carve(1,1);
+    maze[SIZE-2][SIZE-2]=0;
+}
+
+// ---------- DRAW ----------
+function drawCrate(x,y){
+    ctx.fillStyle="#a0522d";
+    ctx.fillRect(x*CELL,y*CELL,CELL,CELL);
+    ctx.strokeStyle="#8b4513"; ctx.strokeRect(x*CELL+1,y*CELL+1,CELL-2,CELL-2);
+}
+function drawMaze(){
+    ctx.clearRect(0,0,820,820);
+    for(let y=0;y<SIZE;y++){
+        for(let x=0;x<SIZE;x++){
+            if(maze[y][x]==1) drawCrate(x,y);
+            else ctx.fillStyle="#1e3a8a",ctx.fillRect(x*CELL,y*CELL,CELL,CELL);
+        }
+    }
+    ctx.fillStyle="#00ff44"; ctx.fillRect((SIZE-2)*CELL,(SIZE-2)*CELL,CELL,CELL); // Target
+    drawPlayer(); if(enemy) drawDemon(enemy.x,enemy.y);
+}
+
+// ---------- PLAYER BOUNCING BALL ----------
+function drawPlayer(){
+    player.bounce+=0.15;
+    let bounceOffset=Math.sin(player.bounce)*3;
+    const pxP = px+CELL/2, pyP = py+bounceOffset+CELL/2;
+    ctx.fillStyle="#00ffff";
+    ctx.beginPath();
+    ctx.arc(pxP,pyP,CELL/2-2,0,Math.PI*2);
+    ctx.fill();
+    // Happy face
+    ctx.fillStyle="#000";
+    ctx.beginPath();
+    ctx.arc(pxP-5,pyP-5,2,0,Math.PI*2); // Left eye
+    ctx.arc(pxP+5,pyP-5,2,0,Math.PI*2); // Right eye
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(pxP,pyP+2,6,0,Math.PI); // Smile
+    ctx.lineWidth=1.5; ctx.strokeStyle="#000"; ctx.stroke();
+}
+
+// ---------- ENEMY AURA ----------
+function drawDemon(x,y){
+    const pxD=x*CELL, pyD=y*CELL;
+    ctx.fillStyle="rgba(255,0,0,0.2)";
+    ctx.fillRect(pxD-2,pyD-2,CELL+4,CELL+4);
+    ctx.fillStyle="#aa0000"; ctx.fillRect(pxD+2, pyD+2, CELL-4, CELL-4);
+    ctx.fillStyle="#ffff00"; ctx.fillRect(pxD+5, pyD+5, 4,4);
+    ctx.fillRect(pxD+CELL-9, pyD+5, 4,4);
+}
+
+// ---------- MOVEMENT ----------
+function move(dir){
+    let nx=player.x,ny=player.y;
+    if(dir=="up") ny--; if(dir=="down") ny++; if(dir=="left") nx--; if(dir=="right") nx++;
+    if(maze[ny][nx]==0){ player.x=nx; player.y=ny; targetX=nx; targetY=ny;
+        if(!firstMove){firstMove=true; setTimeout(()=>{enemy={x:1,y:1}; chasing=true;},5000);}
+    }
+}
+
+// ---------- BFS ----------
+function findPath(sx,sy,tx,ty){
+    let queue=[[sx,sy]],visited=Array.from({length:SIZE},()=>Array(SIZE).fill(false)),parent=Array.from({length:SIZE},()=>Array(SIZE).fill(null));
+    visited[sy][sx]=true;
+    while(queue.length>0){
+        let [x,y]=queue.shift();
+        if(x==tx&&y==ty) break;
+        for(const [dx,dy] of [[0,-1],[1,0],[0,1],[-1,0]]){
+            let nx=x+dx,ny=y+dy;
+            if(nx>=0&&ny>=0&&nx<SIZE&&ny<SIZE&&maze[ny][nx]==0&&!visited[ny][nx]){
+                visited[ny][nx]=true; parent[ny][nx]=[x,y]; queue.push([nx,ny]);
+            }
+        }
+    }
+    let path=[],cx=tx,cy=ty;
+    while(parent[cy][cx]){ path.push([cx,cy]); [cx,cy]=parent[cy][cx]; }
+    return path.reverse();
+}
+
+// ---------- ENEMY ----------
+function updateEnemy(){
+    if(!chasing||!enemy) return;
+    enemySpeedCounter++;
+    if(enemySpeedCounter<10) return;
+    enemySpeedCounter=0;
+    let path=findPath(enemy.x,enemy.y,player.x,player.y);
+    if(path.length>0){ enemy.x=path[0][0]; enemy.y=path[0][1]; }
+    if(enemy.x==player.x&&enemy.y==player.y){
+        lives--; document.getElementById("livesTxt").textContent=lives;
+        showQuote(); deathFlash();
+        setTimeout(()=>{lives<=0?restartGame():resetPositions();},1000);
+    }
+}
+
+// ---------- DEATH ----------
+function deathFlash(){
+    const f=document.getElementById("deathFlash"), r=document.getElementById("respawnText");
+    f.style.opacity="1"; r.style.opacity="1";
+    setTimeout(()=>f.style.opacity="0",250); setTimeout(()=>r.style.opacity="0",1000);
+}
+function showQuote(){
+    const box=document.querySelector("#quoteScreen .card"), text=document.getElementById("quoteText");
+    text.textContent=quotes[Math.floor(Math.random()*quotes.length)];
+    box.classList.add("death-quote-style","shake");
+    document.getElementById("quoteScreen").style.display="flex";
+    setTimeout(()=>box.classList.remove("shake"),400);
+}
+function closeQuote(){ document.querySelector("#quoteScreen .card").classList.remove("death-quote-style"); document.getElementById("quoteScreen").style.display="none"; }
+
+// ---------- WIN ----------
+function checkWin(){
+    startFireworks();
+    chasing=false;
+    const lessonBox=document.querySelector("#lessonScreen .card");
+    lessonBox.classList.add("win-glow");
+    document.getElementById("lessonTitle").textContent=lessons[level-1].title;
+    document.getElementById("lessonText").textContent=lessons[level-1].text;
+    document.getElementById("lessonScreen").style.display="flex";
+    document.getElementById("statusTxt").textContent="Finished";
+}
+
+// ---------- LEVELS ----------
+function nextLevel(){ 
+    level++; document.querySelector("#lessonScreen .card").classList.remove("win-glow");
+    if(level>5){ alert("YOU WIN!"); restartGame(); return; }
+    document.getElementById("lessonScreen").style.display="none"; resetLevel();
+}
+function restartGame(){ level=1;lives=3;document.getElementById("lessonScreen").style.display="none"; resetLevel(); }
+function resetLevel(){ player={x:1,y:1,bounce:0}; px=20; py=20; targetX=1; targetY=1; enemy=null; chasing=false; firstMove=false; enemySpeedCounter=0; generateMaze(); drawMaze(); }
+function resetPositions(){ player={x:1,y:1,bounce:0}; px=20; py=20; targetX=1; targetY=1; enemy=null; chasing=false; firstMove=false; enemySpeedCounter=0; }
+
+// ---------- FIREWORKS ----------
+const fw=document.getElementById("fireworksCanvas"),fctx=fw.getContext("2d"); let parts=[];
+function spawnFirework(){ let x=Math.random()*fw.width,y=Math.random()*fw.height*.5; for(let i=0;i<40;i++){ let a=(i/40)*Math.PI*2; parts.push({x,y,vx:Math.cos(a)*(Math.random()*3+1),vy:Math.sin(a)*(Math.random()*3+1),life:60}); } }
+function fireworksUpdate(){ if(fw.style.display=="none") return; fctx.clearRect(0,0,fw.width,fw.height); parts=parts.filter(p=>p.life>0); for(const p of parts){ p.x+=p.vx; p.y+=p.vy; p.vx*=0.95; p.vy*=0.95; p.life--; fctx.fillStyle=`rgba(0,255,0,${p.life/60})`; fctx.fillRect(p.x,p.y,4,4); } requestAnimationFrame(fireworksUpdate);}
+function startFireworks(){ fw.style.display="block"; parts=[]; let interval=setInterval(spawnFirework,300); setTimeout(()=>{clearInterval(interval); setTimeout(()=>fw.style.display="none",1500);},3000); fireworksUpdate(); }
+
+// ---------- CONTROLS ----------
+document.addEventListener("keydown",e=>{
+    if(e.key=="ArrowUp"||e.key=="w") move("up");
+    if(e.key=="ArrowDown"||e.key=="s") move("down");
+    if(e.key=="ArrowLeft"||e.key=="a") move("left");
+    if(e.key=="ArrowRight"||e.key=="d") move("right");
+});
+
+// ---------- ANIMATE ----------
+function animate(){ px+=(targetX*CELL-px)/2; py+=(targetY*CELL-py)/2; updateEnemy(); drawMaze(); if(player.x==SIZE-2&&player.y==SIZE-2&&chasing) checkWin(); requestAnimationFrame(animate); }
+function startGame(){ document.getElementById("startScreen").style.display="none"; resetLevel(); animate(); }
+</script>
+</body>
+</html>
